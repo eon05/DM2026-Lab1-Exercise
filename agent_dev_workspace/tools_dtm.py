@@ -1,5 +1,6 @@
 from typing import List, Optional, Dict, Any, Union
 import numpy as np
+import pandas as pd
 from langchain_core.tools import tool
 from sklearn.feature_extraction.text import CountVectorizer
 
@@ -84,4 +85,54 @@ def make_tools(session):
         session.store_result("build_dtm_tool", args, summary)
         return summary
 
-    return [build_dtm_tool]
+    @tool
+    def term_frequency_tool(top_n: int = 20) -> Dict[str, Any]:
+        """Aggregate term frequencies across all documents in the document-term matrix.
+
+        Sums column counts in the DTM across all documents, sorts terms by frequency
+        descending (breaking ties alphabetically), and returns top N term counts along
+        with storing a full pandas DataFrame report for visualization.
+
+        Args:
+            top_n: Number of top frequent terms to return in the summary. Default is 20.
+
+        Returns:
+            A summary dictionary containing result_id, top terms dict, and total terms count.
+        """
+        if session.feature_matrix is None or session.feature_names is None:
+            return {
+                "error": "Document-term matrix has not been built yet. Please run build_dtm_tool first."
+            }
+
+        # Sum columns across all documents (axis 0)
+        col_sums = np.asarray(session.feature_matrix.sum(axis=0)).ravel()
+
+        # Pair feature names with counts and cast counts to standard python int
+        term_counts = [
+            (term, int(count))
+            for term, count in zip(session.feature_names, col_sums)
+        ]
+
+        # Sort primarily by frequency descending, secondarily by term alphabetically
+        term_counts.sort(key=lambda x: (-x[1], x[0]))
+
+        # Top N terms dict
+        top_terms_dict = {term: count for term, count in term_counts[:top_n]}
+
+        # Full report DataFrame (term first, frequency second) for visualize_result_tool
+        full_report = pd.DataFrame(term_counts, columns=["term", "frequency"])
+
+        result_id = session.next_result_id("term_freq")
+        summary = {
+            "result_id": result_id,
+            "top_terms": top_terms_dict,
+            "total_terms": len(term_counts),
+        }
+
+        args = {"top_n": top_n}
+        session.store_result(
+            "term_frequency_tool", args, summary, full_report=full_report
+        )
+        return summary
+
+    return [build_dtm_tool, term_frequency_tool]
