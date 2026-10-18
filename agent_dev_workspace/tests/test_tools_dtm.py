@@ -96,3 +96,52 @@ def test_term_frequency_tool_known_answer_14():
     # Check values are standard python ints
     for val in top_terms.values():
         assert type(val) is int
+
+
+def test_dtm_heatmap_tool_known_answer_21():
+    # 1. Initialize a fresh session and load dataset
+    session = SessionState()
+    premade_tools, _ = load_workspace_tools("premade_tools", session)
+    load_dataset_tool = next(t for t in premade_tools if t.name == "load_dataset_tool")
+
+    load_dataset_tool.invoke({
+        "file_path": "agent_dev/sample_fixture.csv",
+        "text_column": "text",
+        "label_column": "label"
+    })
+
+    # 2. Instantiate tools
+    dtm_tools = make_tools(session)
+    build_dtm_tool = next(t for t in dtm_tools if t.name == "build_dtm_tool")
+    dtm_heatmap_tool = next(t for t in dtm_tools if t.name == "dtm_heatmap_tool")
+
+    # Build DTM
+    build_dtm_tool.invoke({})
+
+    # 3. Default call (returns full 8x5 matrix)
+    res_default = dtm_heatmap_tool.invoke({})
+
+    expected_full_matrix = [
+        [3, 1, 1, 0, 0],
+        [2, 1, 1, 0, 0],
+        [1, 1, 1, 0, 0],
+        [0, 1, 0, 1, 3],
+        [0, 1, 0, 1, 2],
+        [0, 1, 0, 1, 1],
+        [0, 1, 0, 1, 1],
+        [0, 0, 0, 0, 0],
+    ]
+    expected_vocabulary = ["alpha", "always", "beta", "delta", "gamma"]
+
+    assert res_default["matrix"] == expected_full_matrix
+    assert res_default["term_labels"] == expected_vocabulary
+    assert res_default["document_labels"] == ["0", "1", "2", "3", "4", "5", "6", "7"]
+
+    # Assert pending figure was set
+    assert session.pending_figure is not None
+
+    # 4. Slice call (n_terms=2, n_documents=3)
+    res_slice = dtm_heatmap_tool.invoke({"n_terms": 2, "n_documents": 3})
+    assert res_slice["matrix"] == [[3, 1], [2, 1], [1, 1]]
+    assert res_slice["term_labels"] == ["alpha", "always"]
+    assert res_slice["document_labels"] == ["0", "1", "2"]
