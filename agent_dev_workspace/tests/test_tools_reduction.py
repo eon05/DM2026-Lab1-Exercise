@@ -1,4 +1,4 @@
-"""Tests for reduce_dimensions_tool in tools_reduction.py against known answers #7, #8, and #9."""
+"""Tests for reduce_dimensions_tool and binarize_labels_tool in tools_reduction.py."""
 
 import numpy as np
 import pytest
@@ -140,3 +140,57 @@ def test_reduce_dimensions_umap():
 
     # Check pending_figure
     assert session.pending_figure is not None
+
+
+def test_binarize_labels_tool_basic():
+    """Test binarize_labels_tool on sample_fixture.csv with 2 classes."""
+    session = _setup_session_and_dtm()
+    reduction_tools = make_reduction_tools(session)
+    binarize_tool = next(t for t in reduction_tools if t.name == "binarize_labels_tool")
+
+    res = binarize_tool.invoke({})
+
+    assert res["classes"] == ["catA", "catB"]
+    assert res["shape"] == [8, 2]
+    assert res["counts_per_class"] == {"catA": 4, "catB": 4}
+
+    # Check bin_category column present on session.dataframe
+    assert "bin_category" in session.dataframe.columns
+    bin_category = session.dataframe["bin_category"].tolist()
+
+    assert bin_category[0] == [1, 0]
+    assert bin_category[3] == [0, 1]
+    assert bin_category[7] == [1, 0]
+
+    # Every row sums to 1
+    for vec in bin_category:
+        assert sum(vec) == 1
+
+
+def test_binarize_labels_tool_three_classes():
+    """Test binarize_labels_tool with 3 classes after modifying row 7 to catC."""
+    session = _setup_session_and_dtm()
+    reduction_tools = make_reduction_tools(session)
+    binarize_tool = next(t for t in reduction_tools if t.name == "binarize_labels_tool")
+
+    # Modify row 7 category_name to catC
+    session.dataframe.loc[7, "category_name"] = "catC"
+
+    res = binarize_tool.invoke({})
+
+    assert res["classes"] == ["catA", "catB", "catC"]
+    assert res["n_classes"] == 3
+    assert res["shape"] == [8, 3]
+
+    bin_category = session.dataframe["bin_category"].tolist()
+    assert bin_category[7] == [0, 0, 1]
+
+
+def test_binarize_labels_tool_no_dataset():
+    """Test binarize_labels_tool error when no dataset is loaded."""
+    session = SessionState()
+    reduction_tools = make_reduction_tools(session)
+    binarize_tool = next(t for t in reduction_tools if t.name == "binarize_labels_tool")
+
+    res = binarize_tool.invoke({})
+    assert "error" in res

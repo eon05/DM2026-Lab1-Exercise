@@ -167,4 +167,58 @@ def make_tools(session: Any) -> List[Any]:
 
         return summary
 
-    return [reduce_dimensions_tool]
+    @tool
+    def binarize_labels_tool() -> Dict[str, Any]:
+        """One-hot encodes the category_name column in session.dataframe into binary 0/1 vectors.
+
+        Returns:
+            Dict containing result_id, sorted classes, class counts, matrix shape, and preview of vectors.
+        """
+        if session.dataframe is None or "category_name" not in session.dataframe.columns:
+            return {"error": "No dataset loaded or 'category_name' column missing."}
+
+        # One-hot encode sorted category names using pd.get_dummies to guarantee one column per class
+        classes = sorted([str(c) for c in session.dataframe["category_name"].unique()])
+        one_hot_df = pd.get_dummies(session.dataframe["category_name"])[classes].astype(int)
+
+        # Create binary row vectors as list of plain Python ints
+        bin_vectors = one_hot_df.values.tolist()
+
+        # Add bin_category column to session.dataframe
+        session.dataframe["bin_category"] = bin_vectors
+
+        # Compute counts per class as plain Python ints
+        counts_per_class = {cls: int(one_hot_df[cls].sum()) for cls in classes}
+
+        # Build preview of first 5 rows
+        preview = []
+        for i in range(min(5, len(session.dataframe))):
+            preview.append(
+                {
+                    "index": i,
+                    "category_name": str(session.dataframe["category_name"].iloc[i]),
+                    "vector": [int(x) for x in bin_vectors[i]],
+                }
+            )
+
+        res_id = session.next_result_id("binarize")
+
+        summary: Dict[str, Any] = {
+            "result_id": res_id,
+            "classes": classes,
+            "n_classes": len(classes),
+            "shape": [len(session.dataframe), len(classes)],
+            "counts_per_class": counts_per_class,
+            "preview": preview,
+        }
+
+        session.store_result(
+            tool_name="binarize_labels_tool",
+            args={},
+            summary=summary,
+            full_report=one_hot_df,
+        )
+
+        return summary
+
+    return [reduce_dimensions_tool, binarize_labels_tool]
