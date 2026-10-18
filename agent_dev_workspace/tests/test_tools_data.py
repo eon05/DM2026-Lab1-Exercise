@@ -1,0 +1,80 @@
+from agent_pipeline.session_state import SessionState
+from agent_pipeline.workspace_loader import load_workspace_tools
+from tools_data import make_tools as make_data_tools
+from tools_dtm import make_tools as make_dtm_tools
+
+
+def _load_fixture(session):
+    """Helper to load sample fixture into a session."""
+    premade_tools, _ = load_workspace_tools("premade_tools", session)
+    load_dataset_tool = next(t for t in premade_tools if t.name == "load_dataset_tool")
+    load_dataset_tool.invoke({
+        "file_path": "agent_dev/sample_fixture.csv",
+        "text_column": "text",
+        "label_column": "label"
+    })
+
+
+def test_check_missing_tool():
+    """Known Answer #2: check_missing_tool on sample_fixture.csv."""
+    session = SessionState()
+    _load_fixture(session)
+
+    data_tools = make_data_tools(session)
+    check_missing_tool = next(t for t in data_tools if t.name == "check_missing_tool")
+
+    res = check_missing_tool.invoke({"text_column": "text"})
+
+    assert res["n_missing"] == 1
+    assert res["missing_indices"] == [7]
+    assert res["total_rows"] == 8
+
+
+def test_check_duplicates_tool_no_drop():
+    """Known Answer #3: check_duplicates_tool with drop=False on sample_fixture.csv."""
+    session = SessionState()
+    _load_fixture(session)
+
+    data_tools = make_data_tools(session)
+    check_duplicates_tool = next(t for t in data_tools if t.name == "check_duplicates_tool")
+
+    res = check_duplicates_tool.invoke({"drop": False})
+
+    assert res["n_duplicates"] == 1
+    assert res["n_rows_dropped"] == 0
+    assert res["rows_before"] == 8
+    assert res["rows_after"] == 8
+    assert len(session.dataframe) == 8
+
+
+def test_check_duplicates_tool_with_drop_and_dtm_clearing():
+    """Known Answer #3 variant: drop=True clears feature_matrix built by build_dtm_tool."""
+    session = SessionState()
+    _load_fixture(session)
+
+    # Build DTM using actual build_dtm_tool first
+    dtm_tools = make_dtm_tools(session)
+    build_dtm_tool = next(t for t in dtm_tools if t.name == "build_dtm_tool")
+    build_dtm_tool.invoke({})
+
+    # Verify DTM was created before dropping duplicates
+    assert session.feature_matrix is not None
+    assert session.feature_matrix.shape[0] == 8
+
+    data_tools = make_data_tools(session)
+    check_duplicates_tool = next(t for t in data_tools if t.name == "check_duplicates_tool")
+
+    res = check_duplicates_tool.invoke({"drop": True})
+
+    assert res["n_duplicates"] == 1
+    assert res["n_rows_dropped"] == 2
+    assert res["rows_before"] == 8
+    assert res["rows_after"] == 6
+    assert len(session.dataframe) == 6
+
+    # Verify downstream matrix state gets cleared
+    assert session.feature_matrix is None
+    assert session.feature_names is None
+    assert session.labels is None
+    assert session.categories == []
+    assert res["cleared_downstream_state"] is True
