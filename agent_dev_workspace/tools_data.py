@@ -79,7 +79,7 @@ def make_tools(session):
             }
 
         df = session.dataframe
-        
+
         # Determine subset columns to check for duplicates (avoid unigrams list columns)
         subset_cols = [c for c in ["text", "category_name"] if c in df.columns]
         if not subset_cols:
@@ -172,6 +172,77 @@ def make_tools(session):
         }
 
         session.store_result("sample_data_tool", {"n": n, "random_state": random_state}, summary)
+        return summary
+
+    @tool
+    def inspect_data_tool(n: int = 5) -> Dict[str, Any]:
+        """Inspect a sample preview of rows and dataset dimensions from session.dataframe.
+
+        Previews up to n rows (capped at max 20) with truncated text and category names,
+        omitting heavy columns like unigrams lists. Also reports the total row/column
+        dimensions and column names of the working dataset.
+
+        Args:
+            n: Number of rows to inspect (default 5, capped between 1 and 20).
+
+        Returns:
+            Dict containing preview rows, dataset shape, column list, and status notes.
+        """
+        if session.dataframe is None:
+            return {
+                "error": "No dataset loaded. Run load_dataset_tool first."
+            }
+
+        df = session.dataframe
+        total_rows = len(df)
+
+        note = None
+        actual_n = n
+        if n > 20:
+            actual_n = 20
+            note = f"Requested n={n} exceeds maximum allowed (20). Capped n to 20."
+        elif n < 1:
+            actual_n = 1
+            note = f"Requested n={n} is less than minimum allowed (1). Set n to 1."
+
+        slice_n = min(actual_n, total_rows)
+        preview_df = df.head(slice_n)
+
+        sample_rows = []
+        for idx, row in preview_df.iterrows():
+            # Handle text truncation and missing/NaN text
+            raw_text = row.get("text", "")
+            if pd.isna(raw_text) or raw_text is None:
+                text_preview = ""
+            else:
+                str_text = str(raw_text)
+                if len(str_text) > 100:
+                    text_preview = str_text[:100] + "..."
+                else:
+                    text_preview = str_text
+
+            category_val = row.get("category_name", row.get("category", ""))
+            if pd.isna(category_val) or category_val is None:
+                category_val = ""
+
+            sample_rows.append({
+                "index": int(idx),
+                "text": text_preview,
+                "category_name": str(category_val)
+            })
+
+        summary = {
+            "result_id": session.next_result_id("inspect_data"),
+            "shape": list(df.shape),
+            "columns": list(df.columns),
+            "n_requested": n,
+            "n_shown": len(sample_rows),
+            "sample_rows": sample_rows
+        }
+        if note:
+            summary["note"] = note
+
+        session.store_result("inspect_data_tool", {"n": n}, summary)
         return summary
 
     @tool
@@ -369,6 +440,7 @@ def make_tools(session):
         check_missing_tool,
         check_duplicates_tool,
         sample_data_tool,
+        inspect_data_tool,
         list_files_tool,
         tokenize_tool,
         describe_data_tool

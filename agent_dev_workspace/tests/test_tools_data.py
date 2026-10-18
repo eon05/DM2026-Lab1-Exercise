@@ -178,3 +178,58 @@ def test_describe_data_tool():
 
     # Verify pending figure set on session
     assert session.pending_figure is not None
+
+
+def test_inspect_data_tool():
+    """Unit test for inspect_data_tool functionality."""
+    # Check 1: n=3 returns 3 rows and shape[0] is 8
+    session1 = SessionState()
+    _load_fixture(session1)
+    tools1 = make_data_tools(session1)
+    inspect_data_tool1 = next(t for t in tools1 if t.name == "inspect_data_tool")
+    res_n3 = inspect_data_tool1.invoke({"n": 3})
+    assert res_n3["n_shown"] == 3
+    assert res_n3["shape"][0] == 8
+    assert len(res_n3["sample_rows"]) == 3
+
+    # Check 2: with n=8, row 7's text is an empty string
+    session2 = SessionState()
+    _load_fixture(session2)
+    tools2 = make_data_tools(session2)
+    inspect_data_tool2 = next(t for t in tools2 if t.name == "inspect_data_tool")
+    res_n8 = inspect_data_tool2.invoke({"n": 8})
+    assert res_n8["sample_rows"][7]["text"] == ""
+
+    # Check 3: n=50 shows all 8 rows and includes the cap note
+    session3 = SessionState()
+    _load_fixture(session3)
+    tools3 = make_data_tools(session3)
+    inspect_data_tool3 = next(t for t in tools3 if t.name == "inspect_data_tool")
+    res_n50 = inspect_data_tool3.invoke({"n": 50})
+    assert res_n50["n_shown"] == 8
+    assert "note" in res_n50
+    assert "Capped n to 20" in res_n50["note"]
+
+    # Check 4: Text truncation test (300-character string in row 0)
+    session4 = SessionState()
+    _load_fixture(session4)
+    session4.dataframe.loc[0, "text"] = "a" * 300
+    tools4 = make_data_tools(session4)
+    inspect_data_tool4 = next(t for t in tools4 if t.name == "inspect_data_tool")
+    res_trunc = inspect_data_tool4.invoke({"n": 1})
+    preview_text = res_trunc["sample_rows"][0]["text"]
+    assert len(preview_text) == 103
+    assert preview_text.endswith("...")
+
+    # Check 5: tokenize_tool run first -> unigrams is not present in preview rows
+    session5 = SessionState()
+    _load_fixture(session5)
+    tools5 = make_data_tools(session5)
+    tokenize_tool = next(t for t in tools5 if t.name == "tokenize_tool")
+    tokenize_tool.invoke({"text_column": "text"})
+    assert "unigrams" in session5.dataframe.columns
+
+    inspect_data_tool5 = next(t for t in tools5 if t.name == "inspect_data_tool")
+    res_tok = inspect_data_tool5.invoke({"n": 2})
+    row_keys = set(res_tok["sample_rows"][0].keys())
+    assert "unigrams" not in row_keys
