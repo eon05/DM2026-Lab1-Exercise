@@ -78,3 +78,53 @@ def test_check_duplicates_tool_with_drop_and_dtm_clearing():
     assert session.labels is None
     assert session.categories == []
     assert res["cleared_downstream_state"] is True
+
+
+def test_sample_data_tool_and_dtm_clearing():
+    """Known Answer #13: sample_data_tool with n=4, random_state=42 on sample_fixture.csv."""
+    session = SessionState()
+    _load_fixture(session)
+
+    # Build DTM using build_dtm_tool first
+    dtm_tools = make_dtm_tools(session)
+    build_dtm_tool = next(t for t in dtm_tools if t.name == "build_dtm_tool")
+    build_dtm_tool.invoke({})
+
+    # Verify DTM was created before sampling
+    assert session.feature_matrix is not None
+
+    data_tools = make_data_tools(session)
+    sample_data_tool = next(t for t in data_tools if t.name == "sample_data_tool")
+
+    res = sample_data_tool.invoke({"n": 4, "random_state": 42})
+
+    assert res["n_samples"] == 4
+    assert res["sampled_indices"] == [1, 5, 0, 7]
+    assert res["total_rows_before"] == 8
+    assert res["total_rows_after"] == 4
+    assert len(session.dataframe) == 4
+
+    # Verify downstream matrix state gets cleared
+    assert session.feature_matrix is None
+    assert session.feature_names is None
+    assert session.labels is None
+    assert session.categories == []
+    assert res["cleared_downstream_state"] is True
+
+
+def test_list_files_tool():
+    """Known Answer #11: list_files_tool on newdataset and traversal security check."""
+    session = SessionState()
+
+    data_tools = make_data_tools(session)
+    list_files_tool = next(t for t in data_tools if t.name == "list_files_tool")
+
+    # Known answer #11 check
+    res = list_files_tool.invoke({"subdirectory": "newdataset"})
+    assert res["directories"] == []
+    assert res["files"] == ["Reddit-stock-sentiment.csv"]
+
+    # Security path traversal check
+    res_traversal = list_files_tool.invoke({"subdirectory": "../"})
+    assert "error" in res_traversal
+    assert "Security error" in res_traversal["error"]
