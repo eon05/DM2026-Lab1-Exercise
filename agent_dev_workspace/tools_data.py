@@ -5,6 +5,9 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import nltk
 from langchain_core.tools import tool
 
 
@@ -77,7 +80,7 @@ def make_tools(session):
 
         df = session.dataframe
         
-        # Determine subset columns to check for duplicates
+        # Determine subset columns to check for duplicates (avoid unigrams list columns)
         subset_cols = [c for c in ["text", "category_name"] if c in df.columns]
         if not subset_cols:
             subset_cols = list(df.columns)
@@ -226,4 +229,147 @@ def make_tools(session):
         session.store_result("list_files_tool", {"subdirectory": subdirectory}, summary)
         return summary
 
-    return [check_missing_tool, check_duplicates_tool, sample_data_tool, list_files_tool]
+    @tool
+    def tokenize_tool(text_column: str = "text") -> Dict[str, Any]:
+        """Tokenize text in session.dataframe using NLTK word_tokenize on lowercased text.
+
+        Safely converts missing or NaN values to empty strings, lowercases text,
+        and tokenizes using NLTK's word_tokenize. Stores resulting token lists
+        in df['unigrams'] and session.artifacts['unigrams'].
+
+        Args:
+            text_column: Column name containing document text (default 'text').
+
+        Returns:
+            Dict containing document count, total tokens, vocabulary size, and sample tokens.
+        """
+        if session.dataframe is None:
+            return {
+                "error": "No dataset loaded. Run load_dataset_tool first."
+            }
+
+        df = session.dataframe
+        if text_column not in df.columns:
+            return {
+                "error": f"Column '{text_column}' not found in dataframe."
+            }
+
+        # Ensure required NLTK data resources are available
+        try:
+            nltk.data.find("tokenizers/punkt")
+        except LookupError:
+            nltk.download("punkt", quiet=True)
+
+        try:
+            nltk.data.find("tokenizers/punkt_tab")
+        except LookupError:
+            nltk.download("punkt_tab", quiet=True)
+
+        # Tokenize each text entry safely handling NaNs / non-strings
+        def safe_tokenize(val):
+            if pd.isna(val) or val is None:
+                return []
+            text_str = str(val).lower()
+            return nltk.word_tokenize(text_str)
+
+        tokens_series = df[text_column].apply(safe_tokenize)
+        df["unigrams"] = tokens_series
+        session.artifacts["unigrams"] = tokens_series.tolist()
+
+        # Compute summary metrics
+        total_documents = len(df)
+        all_tokens = [tok for doc in tokens_series for tok in doc]
+        total_tokens = len(all_tokens)
+        vocab_size = len(set(all_tokens))
+        sample_tokens = [doc_tokens[:20] for doc_tokens in tokens_series.head(5).tolist()]
+
+        summary = {
+            "result_id": session.next_result_id("tokenize"),
+            "n_documents": total_documents,
+            "total_tokens": total_tokens,
+            "vocab_size": vocab_size,
+            "sample_tokens": sample_tokens
+        }
+
+        session.store_result("tokenize_tool", {"text_column": text_column}, summary)
+        return summary
+
+    @tool
+    def describe_data_tool() -> Dict[str, Any]:
+        """Compute text length statistics and set a category boxplot on session.pending_figure.
+
+        Calculates text length using df['text'].fillna('').astype(str).apply(len),
+        computes .describe() statistics overall and per category_name, and creates a
+        seaborn boxplot stored on session.pending_figure.
+
+        Returns:
+            Dict containing overall and per-category text_length describe statistics.
+        """
+        if session.dataframe is None:
+            return {
+                "error": "No dataset loaded. Run load_dataset_tool first."
+            }
+
+        df = session.dataframe
+        if "text" not in df.columns:
+            return {
+                "error": "Column 'text' not found in dataframe."
+            }
+
+        # Compute text length character counts handling missing values
+        df["text_length"] = df["text"].fillna("").astype(str).apply(len)
+
+        # Calculate overall describe statistics
+        overall_stats_series = df["text_length"].describe()
+
+        def clean_stats(series_or_dict):
+            """Convert stats dict to Python floats and replace NaN with None for JSON compatibility."""
+            res = {}
+            for k, v in series_or_dict.items():
+                if pd.isna(v) or np.isnan(v):
+                    res[k] = None
+                else:
+                    res[k] = float(v) if k != "count" else int(v)
+            return res
+
+        overall_stats = clean_stats(overall_stats_series)
+
+        # Calculate per-category describe statistics if category_name column exists
+        per_category_stats = {}
+        if "category_name" in df.columns:
+            grouped = df.groupby("category_name")["text_length"].describe()
+            for cat, row in grouped.iterrows():
+                per_category_stats[str(cat)] = clean_stats(row)
+
+        # Generate box plot by category
+        fig, ax = plt.subplots(figsize=(8, 5))
+        if "category_name" in df.columns:
+            sns.boxplot(x="category_name", y="text_length", data=df, ax=ax)
+            ax.set_title("Document Text Length by Category")
+            ax.set_xlabel("Category")
+        else:
+            sns.boxplot(y="text_length", data=df, ax=ax)
+            ax.set_title("Document Text Length Distribution")
+        ax.set_ylabel("Text Length (characters)")
+        plt.tight_layout()
+
+        # Set pending figure on session
+        session.pending_figure = fig
+
+        summary = {
+            "result_id": session.next_result_id("describe_data"),
+            "overall": overall_stats,
+            "per_category": per_category_stats
+        }
+
+        session.store_result("describe_data_tool", {}, summary)
+        return summary
+
+    return [
+        check_missing_tool,
+        check_duplicates_tool,
+        sample_data_tool,
+        list_files_tool,
+        tokenize_tool,
+        describe_data_tool
+    ]

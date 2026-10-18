@@ -2,6 +2,7 @@ from agent_pipeline.session_state import SessionState
 from agent_pipeline.workspace_loader import load_workspace_tools
 from tools_data import make_tools as make_data_tools
 from tools_dtm import make_tools as make_dtm_tools
+import pytest
 
 
 def _load_fixture(session):
@@ -128,3 +129,52 @@ def test_list_files_tool():
     res_traversal = list_files_tool.invoke({"subdirectory": "../"})
     assert "error" in res_traversal
     assert "Security error" in res_traversal["error"]
+
+
+def test_tokenize_tool():
+    """Known Answer #10: tokenize_tool on sample_fixture.csv."""
+    session = SessionState()
+    _load_fixture(session)
+
+    data_tools = make_data_tools(session)
+    tokenize_tool = next(t for t in data_tools if t.name == "tokenize_tool")
+
+    res = tokenize_tool.invoke({"text_column": "text"})
+
+    assert "unigrams" in session.dataframe.columns
+    unigrams_list = session.dataframe["unigrams"].tolist()
+
+    # Doc 0 tokens: always, alpha, alpha, alpha, beta
+    assert unigrams_list[0] == ["always", "alpha", "alpha", "alpha", "beta"]
+    # Doc 7 (empty text): []
+    assert unigrams_list[7] == []
+
+    assert res["n_documents"] == 8
+
+
+def test_describe_data_tool():
+    """Known Answer #18: describe_data_tool on sample_fixture.csv."""
+    session = SessionState()
+    _load_fixture(session)
+
+    data_tools = make_data_tools(session)
+    describe_data_tool = next(t for t in data_tools if t.name == "describe_data_tool")
+
+    res = describe_data_tool.invoke({})
+
+    # Check text_length column values
+    assert session.dataframe["text_length"].tolist() == [29, 23, 17, 30, 24, 18, 18, 0]
+
+    # Check overall describe statistics
+    overall = res["overall"]
+    assert overall["count"] == 8
+    assert overall["mean"] == pytest.approx(19.875, abs=1e-3)
+    assert overall["std"] == pytest.approx(9.4330, abs=1e-3)
+
+    # Check per-category describe statistics
+    per_cat = res["per_category"]
+    assert per_cat["catA"]["mean"] == pytest.approx(17.25, abs=1e-3)
+    assert per_cat["catB"]["mean"] == pytest.approx(22.5, abs=1e-3)
+
+    # Verify pending figure set on session
+    assert session.pending_figure is not None
